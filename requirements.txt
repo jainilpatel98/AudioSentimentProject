@@ -1,0 +1,12 @@
+gdown>=5.2.0,<6.0
+numpy>=2.0,<3.0
+pandas>=2.2,<3.1
+librosa>=0.11.0,<1.0
+soundfile>=0.13.1,<1.0
+matplotlib>=3.9,<4.0
+scikit-learn>=1.7,<2.0
+tqdm>=4.67,<5.0
+torch>=2.6,<3.0
+transformers>=4.50,<6.0
+streamlit>=1.41,<2.0
+streamlit-webrtc>=0.63,<1.0

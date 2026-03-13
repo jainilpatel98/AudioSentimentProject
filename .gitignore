@@ -1,0 +1,9 @@
+.venv/
+.venv311/
+.actors_speech/
+
+actors_speech.zip
+actors_speech/
+artifacts/
+__pycache__/
+.idea/
