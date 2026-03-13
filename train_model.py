@@ -116,6 +116,12 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Use local Hugging Face cache only (no network checks/downloads).",
     )
+    parser.add_argument(
+        "--resume-if-exists",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Resume training from an existing output directory checkpoint when available.",
+    )
 
     return parser.parse_args()
 
@@ -623,6 +629,95 @@ def checkpoint_payload(
     }
 
 
+def load_history_file(path: Path) -> List[Dict[str, float]]:
+    if not path.exists():
+        return []
+    with path.open("r", encoding="utf-8") as f:
+        payload = json.load(f)
+    if isinstance(payload, dict) and isinstance(payload.get("history"), list):
+        return payload["history"]
+    return []
+
+
+def save_history_file(path: Path, history: List[Dict[str, float]]) -> None:
+    save_json(path, {"history": history})
+
+
+def save_resume_state(
+    path: Path,
+    base_payload: Dict,
+    optimizer: AdamW,
+    scheduler,
+    epoch: int,
+    best_val_score: float,
+    early_stop_counter: int,
+    history: List[Dict[str, float]],
+) -> None:
+    payload = dict(base_payload)
+    payload.update(
+        {
+            "epoch": int(epoch),
+            "best_val_score": float(best_val_score),
+            "early_stop_counter": int(early_stop_counter),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
+            "history": history,
+        }
+    )
+    torch.save(payload, path)
+
+
+def maybe_resume_training(
+    output_dir: Path,
+    args: argparse.Namespace,
+    model: MultiTaskEmotionModel,
+    optimizer: AdamW,
+    scheduler,
+    device: torch.device,
+) -> Tuple[int, List[Dict[str, float]], float, int]:
+    if not args.resume_if_exists:
+        return 1, [], -1.0, 0
+
+    resume_path = output_dir / "resume_state.pt"
+    model_state_path = output_dir / "model_state.pt"
+    history_path = output_dir / "history.json"
+
+    if resume_path.exists():
+        payload = load_checkpoint_state(str(resume_path), map_location=device)
+        model.load_state_dict(payload["state_dict"])
+        if payload.get("optimizer_state_dict") is not None:
+            optimizer.load_state_dict(payload["optimizer_state_dict"])
+        if payload.get("scheduler_state_dict") is not None:
+            scheduler.load_state_dict(payload["scheduler_state_dict"])
+        history = payload.get("history")
+        if not isinstance(history, list):
+            history = load_history_file(history_path)
+        completed_epoch = int(payload.get("epoch", len(history)))
+        best_val_score = float(payload.get("best_val_score", -1.0))
+        early_stop_counter = int(payload.get("early_stop_counter", 0))
+        print(
+            "Resuming training from resume_state.pt | "
+            f"completed_epoch={completed_epoch} next_epoch={completed_epoch + 1}"
+        )
+        return completed_epoch + 1, history, best_val_score, early_stop_counter
+
+    if model_state_path.exists() and history_path.exists():
+        history = load_history_file(history_path)
+        if history:
+            payload = load_checkpoint_state(str(model_state_path), map_location=device)
+            model.load_state_dict(payload["state_dict"])
+            completed_epoch = int(max(int(row.get("epoch", 0)) for row in history))
+            best_val_score = float(max(row.get("val_composite_score", -1.0) for row in history))
+            print(
+                "Resuming from model_state.pt + history.json | "
+                f"completed_epoch={completed_epoch} next_epoch={completed_epoch + 1} "
+                "(optimizer/scheduler restarted)"
+            )
+            return completed_epoch + 1, history, best_val_score, 0
+
+    return 1, [], -1.0, 0
+
+
 def main() -> None:
     args = parse_args()
     validate_args(args)
@@ -893,12 +988,24 @@ def main() -> None:
         num_training_steps=total_steps,
     )
 
+    history_path = output_dir / "history.json"
+    resume_checkpoint = output_dir / "resume_state.pt"
     history: List[Dict[str, float]] = []
     best_val_score = -1.0
     best_checkpoint = output_dir / "best_model.pt"
     early_stop_counter = 0
+    start_epoch = 1
 
-    for epoch in range(1, args.epochs + 1):
+    start_epoch, history, best_val_score, early_stop_counter = maybe_resume_training(
+        output_dir=output_dir,
+        args=args,
+        model=model,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        device=device,
+    )
+
+    for epoch in range(start_epoch, args.epochs + 1):
         if args.freeze_backbone:
             set_feature_encoder_trainable(model, trainable=False)
             model.backbone.eval()
@@ -980,6 +1087,27 @@ def main() -> None:
             )
         else:
             early_stop_counter += 1
+
+        save_history_file(history_path, history)
+        save_resume_state(
+            path=resume_checkpoint,
+            base_payload=checkpoint_payload(
+                model=model,
+                model_name=args.model_name,
+                emotion_labels=emotion_labels,
+                intensity_labels=intensity_labels,
+                head_dropout=args.head_dropout,
+                use_handcrafted_features=args.use_handcrafted_features,
+                aux_feature_dim=aux_feature_dim,
+                aux_hidden_dim=args.aux_hidden_dim,
+            ),
+            optimizer=optimizer,
+            scheduler=scheduler,
+            epoch=epoch,
+            best_val_score=best_val_score,
+            early_stop_counter=early_stop_counter,
+            history=history,
+        )
 
         if early_stop_counter >= args.patience:
             print(f"Early stopping triggered at epoch {epoch}.")
@@ -1128,7 +1256,7 @@ def main() -> None:
     save_json(output_dir / "emotion_classification_report.json", emotion_report)
     save_json(output_dir / "intensity_classification_report.json", intensity_report)
     save_json(output_dir / "joint_classification_report.json", joint_report)
-    save_json(output_dir / "history.json", {"history": history})
+    save_history_file(history_path, history)
     save_json(output_dir / "metrics.json", metrics)
 
     print(json.dumps(metrics, indent=2))
