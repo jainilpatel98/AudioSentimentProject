@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Dict, Tuple
+from pathlib import Path
+from typing import Dict, Sequence, Tuple
 
 import torch
 from torch import nn
@@ -131,7 +132,29 @@ def set_feature_encoder_trainable(model: MultiTaskEmotionModel, trainable: bool)
 
 
 def load_checkpoint_state(checkpoint_path: str, map_location: torch.device) -> Dict:
-    payload = torch.load(checkpoint_path, map_location=map_location)
+    # Our checkpoints store full Python dict payloads, not just raw tensor weights.
+    payload = torch.load(checkpoint_path, map_location=map_location, weights_only=False)
     if isinstance(payload, dict):
         return payload
     return {"state_dict": payload}
+
+
+def load_first_valid_checkpoint(checkpoint_paths: Sequence[Path], map_location: torch.device) -> Tuple[Dict, Path]:
+    errors: list[str] = []
+    for checkpoint_path in checkpoint_paths:
+        if not checkpoint_path.exists():
+            continue
+        try:
+            return load_checkpoint_state(str(checkpoint_path), map_location=map_location), checkpoint_path
+        except Exception as exc:
+            errors.append(f"{checkpoint_path.name}: {exc}")
+    joined = " | ".join(errors) if errors else "no checkpoint files found"
+    raise RuntimeError(f"Could not load any valid checkpoint from artifacts directory: {joined}")
+
+
+def is_lfs_pointer_file(path: Path) -> bool:
+    if not path.exists() or not path.is_file():
+        return False
+    with path.open("rb") as f:
+        prefix = f.read(64)
+    return prefix.startswith(b"version https://git-lfs.github.com/spec/v1")

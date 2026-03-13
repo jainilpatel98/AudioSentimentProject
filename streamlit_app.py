@@ -15,7 +15,7 @@ import streamlit as st
 import torch
 from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
 
-from ser_multitask import MultiTaskEmotionModel, load_checkpoint_state
+from ser_multitask import MultiTaskEmotionModel, is_lfs_pointer_file, load_first_valid_checkpoint
 from ser_pipeline import AudioConfig, FeatureConfig, ensure_audio_length, extract_handcrafted_features
 
 try:
@@ -118,16 +118,32 @@ def _load_multitask_bundle(base: Path, metadata: dict, device: torch.device) -> 
     emotion_labels = list(metadata["emotion_labels"])
     intensity_labels = list(metadata.get("intensity_labels", ["normal", "strong"]))
 
-    hf_model_path = base / "hf_model"
-    state_path = base / "model_state.pt"
-    if not state_path.exists():
-        state_path = base / "best_model.pt"
-    if not state_path.exists():
+    checkpoint_candidates = [base / "model_state.pt", base / "best_model.pt"]
+    if not any(path.exists() for path in checkpoint_candidates):
         raise FileNotFoundError(
             "Multitask artifacts require `model_state.pt` (or `best_model.pt`) in artifacts directory."
         )
 
-    payload = load_checkpoint_state(str(state_path), map_location=device)
+    payload, state_path = load_first_valid_checkpoint(checkpoint_candidates, map_location=device)
+    hf_model_path = base / "hf_model"
+    backbone_source = str(hf_model_path)
+    feature_extractor_source = str(hf_model_path)
+    local_only_fallback = False
+    model_name_fallback = str(payload.get("model_name", metadata.get("model_name", ""))).strip()
+    hf_config_path = hf_model_path / "config.json"
+    hf_preproc_path = hf_model_path / "preprocessor_config.json"
+    hf_weights_path = hf_model_path / "model.safetensors"
+    hf_bundle_invalid = (
+        not hf_config_path.exists()
+        or not hf_preproc_path.exists()
+        or is_lfs_pointer_file(hf_config_path)
+        or is_lfs_pointer_file(hf_preproc_path)
+        or is_lfs_pointer_file(hf_weights_path)
+    )
+    if hf_bundle_invalid and model_name_fallback:
+        backbone_source = model_name_fallback
+        feature_extractor_source = model_name_fallback
+        local_only_fallback = True
 
     head_dropout = float(payload.get("head_dropout", metadata.get("head_dropout", 0.2)))
     use_handcrafted_features = bool(
@@ -140,19 +156,23 @@ def _load_multitask_bundle(base: Path, metadata: dict, device: torch.device) -> 
     feature_mean, feature_std = _build_feature_stats(metadata)
 
     model = MultiTaskEmotionModel(
-        backbone_name_or_path=str(hf_model_path),
+        backbone_name_or_path=backbone_source,
         num_emotions=len(emotion_labels),
         num_intensity=len(intensity_labels),
         head_dropout=head_dropout,
         use_handcrafted_features=use_handcrafted_features,
         aux_feature_dim=aux_feature_dim,
         aux_hidden_dim=aux_hidden_dim,
+        local_files_only=local_only_fallback,
     )
     model.load_state_dict(payload["state_dict"])
     model.eval()
     model.to(device)
 
-    feature_extractor = AutoFeatureExtractor.from_pretrained(hf_model_path)
+    feature_extractor = AutoFeatureExtractor.from_pretrained(
+        feature_extractor_source,
+        local_files_only=local_only_fallback,
+    )
 
     return InferenceBundle(
         task_type="emotion_intensity_multitask",

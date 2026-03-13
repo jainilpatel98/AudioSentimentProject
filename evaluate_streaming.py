@@ -13,7 +13,7 @@ import torch
 from sklearn.metrics import classification_report, confusion_matrix, f1_score
 from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
 
-from ser_multitask import MultiTaskEmotionModel, load_checkpoint_state
+from ser_multitask import MultiTaskEmotionModel, is_lfs_pointer_file, load_first_valid_checkpoint
 from ser_pipeline import AudioConfig, FeatureConfig, discover_records, ensure_audio_length, extract_handcrafted_features
 
 
@@ -120,13 +120,34 @@ def load_model_bundle(artifacts_dir: Path, device: torch.device) -> tuple[Loaded
 
     task_type = str(metadata.get("task_type", "single_task"))
     hf_model_path = artifacts_dir / "hf_model"
-    feature_extractor = AutoFeatureExtractor.from_pretrained(hf_model_path)
 
     if task_type == "emotion_intensity_multitask":
-        state_path = artifacts_dir / "model_state.pt"
-        if not state_path.exists():
-            state_path = artifacts_dir / "best_model.pt"
-        payload = load_checkpoint_state(str(state_path), map_location=device)
+        checkpoint_candidates = [artifacts_dir / "model_state.pt", artifacts_dir / "best_model.pt"]
+        payload, state_path = load_first_valid_checkpoint(checkpoint_candidates, map_location=device)
+        model_name_fallback = str(payload.get("model_name", metadata.get("model_name", ""))).strip()
+        feature_extractor_source = str(hf_model_path)
+        backbone_source = str(hf_model_path)
+        local_only_fallback = False
+        hf_config_path = hf_model_path / "config.json"
+        hf_preproc_path = hf_model_path / "preprocessor_config.json"
+        hf_weights_path = hf_model_path / "model.safetensors"
+        hf_bundle_invalid = (
+            not hf_config_path.exists()
+            or not hf_preproc_path.exists()
+            or is_lfs_pointer_file(hf_config_path)
+            or is_lfs_pointer_file(hf_preproc_path)
+            or is_lfs_pointer_file(hf_weights_path)
+        )
+        if hf_bundle_invalid:
+            if not model_name_fallback:
+                raise FileNotFoundError("No valid hf_model bundle found and no model_name fallback is available.")
+            feature_extractor_source = model_name_fallback
+            backbone_source = model_name_fallback
+            local_only_fallback = True
+        feature_extractor = AutoFeatureExtractor.from_pretrained(
+            feature_extractor_source,
+            local_files_only=local_only_fallback,
+        )
 
         emotion_labels = list(metadata.get("emotion_labels", payload.get("emotion_labels", [])))
         intensity_labels = list(metadata.get("intensity_labels", payload.get("intensity_labels", ["normal", "strong"])))
@@ -138,13 +159,14 @@ def load_model_bundle(artifacts_dir: Path, device: torch.device) -> tuple[Loaded
         aux_hidden_dim = int(payload.get("aux_hidden_dim", metadata.get("aux_hidden_dim", 128)))
 
         model = MultiTaskEmotionModel(
-            backbone_name_or_path=str(hf_model_path),
+            backbone_name_or_path=backbone_source,
             num_emotions=len(emotion_labels),
             num_intensity=len(intensity_labels),
             head_dropout=float(payload.get("head_dropout", 0.2)),
             use_handcrafted_features=use_handcrafted_features,
             aux_feature_dim=aux_feature_dim,
             aux_hidden_dim=aux_hidden_dim,
+            local_files_only=local_only_fallback,
         )
         model.load_state_dict(payload["state_dict"])
         model.to(device)
@@ -169,6 +191,7 @@ def load_model_bundle(artifacts_dir: Path, device: torch.device) -> tuple[Loaded
         return loaded, metadata
 
     # Legacy single-task path.
+    feature_extractor = AutoFeatureExtractor.from_pretrained(hf_model_path)
     model = AutoModelForAudioClassification.from_pretrained(hf_model_path)
     model.to(device)
     model.eval()
