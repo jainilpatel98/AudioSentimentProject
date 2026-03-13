@@ -218,7 +218,6 @@ def trim_to_latest_samples(y: np.ndarray, target_samples: int) -> np.ndarray:
     pad = target_samples - len(y)
     return np.pad(y, (pad, 0), mode="constant").astype(np.float32)
 
-
 def prepare_aux_features(bundle: LoadedModel, waveform: np.ndarray) -> torch.Tensor | None:
     if not bundle.use_handcrafted_features:
         return None

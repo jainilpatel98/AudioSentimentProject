@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Tuple
 
 import librosa
+import matplotlib.pyplot as plt
 import numpy as np
 import soundfile as sf
 import streamlit as st
@@ -27,6 +28,12 @@ except Exception:
 
 
 st.set_page_config(page_title="Speech Emotion Detector", page_icon="🎙️", layout="centered")
+
+DEFAULT_AUDIO_RECEIVER_SIZE = 256
+DEFAULT_LIVE_UPDATE_SECONDS = 0.9
+DEFAULT_LIVE_SMOOTHING = 0.25
+DEFAULT_LIVE_VAD_RMS = 0.008
+DEFAULT_SPECTROGRAM_REFRESH_SECONDS = 1.5
 
 
 @dataclass
@@ -246,7 +253,6 @@ def trim_to_latest_samples(y: np.ndarray, target_samples: int) -> np.ndarray:
     pad = target_samples - len(y)
     return np.pad(y, (pad, 0), mode="constant").astype(np.float32)
 
-
 def preprocess_waveform(y: np.ndarray, sr: int, cfg: AudioConfig) -> np.ndarray:
     if sr != cfg.sample_rate:
         y = librosa.resample(y, orig_sr=sr, target_sr=cfg.sample_rate)
@@ -336,6 +342,13 @@ def state_key(prefix: str, key: str) -> str:
     return f"{prefix}_{key}"
 
 
+def reset_live_state(buffer_key: str, emotion_key: str, intensity_key: str, silence_key: str) -> None:
+    st.session_state[buffer_key] = np.zeros(0, dtype=np.float32)
+    st.session_state[emotion_key] = None
+    st.session_state[intensity_key] = None
+    st.session_state[silence_key] = None
+
+
 def render_single_task_outputs(probs: np.ndarray, labels: list[str], heading_prefix: str = "") -> None:
     top_idx = int(np.argmax(probs))
     top_label = labels[top_idx]
@@ -345,7 +358,7 @@ def render_single_task_outputs(probs: np.ndarray, labels: list[str], heading_pre
     st.success(f"{title}: **{top_label.upper()}** ({confidence:.1%} confidence)")
 
     score_rows = [{"label": label, "probability": float(prob)} for label, prob in zip(labels, probs)]
-    st.dataframe(score_rows, use_container_width=True, hide_index=True)
+    st.dataframe(score_rows, width="stretch", hide_index=True)
     st.bar_chart({label: float(prob) for label, prob in zip(labels, probs)})
 
 
@@ -376,7 +389,7 @@ def render_multitask_outputs(
         emotion_rows = [
             {"emotion": label, "probability": float(prob)} for label, prob in zip(emotion_labels, emotion_probs)
         ]
-        st.dataframe(emotion_rows, use_container_width=True, hide_index=True)
+        st.dataframe(emotion_rows, width="stretch", hide_index=True)
         st.bar_chart({label: float(prob) for label, prob in zip(emotion_labels, emotion_probs)})
     with col2:
         st.markdown("**Intensity probabilities**")
@@ -384,8 +397,37 @@ def render_multitask_outputs(
             {"intensity": label, "probability": float(prob)}
             for label, prob in zip(intensity_labels, intensity_probs)
         ]
-        st.dataframe(intensity_rows, use_container_width=True, hide_index=True)
+        st.dataframe(intensity_rows, width="stretch", hide_index=True)
         st.bar_chart({label: float(prob) for label, prob in zip(intensity_labels, intensity_probs)})
+
+
+def render_live_spectrogram(waveform: np.ndarray, sr: int) -> None:
+    mel = librosa.feature.melspectrogram(
+        y=waveform,
+        sr=sr,
+        n_mels=64,
+        n_fft=1024,
+        hop_length=256,
+        power=2.0,
+    )
+    mel_db = librosa.power_to_db(mel, ref=np.max)
+
+    fig, ax = plt.subplots(figsize=(8, 3))
+    image = ax.imshow(
+        mel_db,
+        origin="lower",
+        aspect="auto",
+        interpolation="nearest",
+        cmap="magma",
+    )
+    duration_seconds = len(waveform) / float(sr) if sr > 0 else 0.0
+    ax.set_title(f"Live Buffer Mel Spectrogram ({duration_seconds:.2f}s)")
+    ax.set_xlabel("Frames")
+    ax.set_ylabel("Mel bins")
+    fig.colorbar(image, ax=ax, format="%+2.0f dB")
+    fig.tight_layout()
+    st.pyplot(fig, clear_figure=True)
+    plt.close(fig)
 
 
 def render_live_mode(bundle: InferenceBundle, artifacts_dir: Path) -> None:
@@ -413,7 +455,7 @@ def render_live_mode(bundle: InferenceBundle, artifacts_dir: Path) -> None:
             "Update (s)",
             min_value=0.25,
             max_value=2.0,
-            value=0.6,
+            value=DEFAULT_LIVE_UPDATE_SECONDS,
             step=0.05,
         )
     with col3:
@@ -421,7 +463,7 @@ def render_live_mode(bundle: InferenceBundle, artifacts_dir: Path) -> None:
             "Voice threshold",
             min_value=0.0,
             max_value=0.05,
-            value=0.004,
+            value=DEFAULT_LIVE_VAD_RMS,
             step=0.001,
         )
 
@@ -429,15 +471,19 @@ def render_live_mode(bundle: InferenceBundle, artifacts_dir: Path) -> None:
         "Prediction smoothing",
         min_value=0.0,
         max_value=0.95,
-        value=0.65,
+        value=DEFAULT_LIVE_SMOOTHING,
         step=0.05,
         help="Higher values reduce jitter but respond slower.",
     )
+    show_spectrogram = st.checkbox("Show live spectrogram", value=True)
+    show_probability_details = st.checkbox("Show live probability details", value=False)
 
     stream_key = f"live_{str(artifacts_dir).replace('/', '_')}"
     buf_key = state_key(stream_key, "buffer")
     emo_ema_key = state_key(stream_key, "emotion_ema")
     int_ema_key = state_key(stream_key, "intensity_ema")
+    silence_key = state_key(stream_key, "silence_since")
+    spec_key = state_key(stream_key, "last_spectrogram_time")
 
     if buf_key not in st.session_state:
         st.session_state[buf_key] = np.zeros(0, dtype=np.float32)
@@ -445,18 +491,25 @@ def render_live_mode(bundle: InferenceBundle, artifacts_dir: Path) -> None:
         st.session_state[emo_ema_key] = None
     if int_ema_key not in st.session_state:
         st.session_state[int_ema_key] = None
+    if silence_key not in st.session_state:
+        st.session_state[silence_key] = None
+    if spec_key not in st.session_state:
+        st.session_state[spec_key] = 0.0
 
     ctx = webrtc_streamer(
         key=stream_key,
         mode=WebRtcMode.SENDONLY,
         media_stream_constraints={"audio": True, "video": False},
         async_processing=True,
+        audio_receiver_size=DEFAULT_AUDIO_RECEIVER_SIZE,
     )
 
     status_placeholder = st.empty()
     results_placeholder = st.empty()
+    spectrogram_placeholder = st.empty()
 
     if not ctx.state.playing:
+        reset_live_state(buf_key, emo_ema_key, int_ema_key, silence_key)
         status_placeholder.info("Click Start and begin speaking.")
         return
 
@@ -474,6 +527,9 @@ def render_live_mode(bundle: InferenceBundle, artifacts_dir: Path) -> None:
             frames = ctx.audio_receiver.get_frames(timeout=1)
         except queue.Empty:
             continue
+
+        if len(frames) > 24:
+            frames = frames[-24:]
 
         for frame in frames:
             chunk, frame_sr = frame_to_mono_float32(frame)
@@ -501,8 +557,17 @@ def render_live_mode(bundle: InferenceBundle, artifacts_dir: Path) -> None:
         analysis_window = live_buffer[-window_size_samples:]
         rms = float(np.sqrt(np.mean(np.square(analysis_window)) + 1e-12))
         if rms < vad_rms:
+            silent_since = st.session_state[silence_key]
+            if silent_since is None:
+                st.session_state[silence_key] = now
+                silent_for = 0.0
+            else:
+                silent_for = now - float(silent_since)
+            if silent_for >= max(1.0, update_interval * 2.0):
+                reset_live_state(buf_key, emo_ema_key, int_ema_key, silence_key)
             status_placeholder.info("Listening... no speech detected in current window.")
             continue
+        st.session_state[silence_key] = None
 
         waveform = preprocess_live_waveform(analysis_window, bundle.cfg.sample_rate, bundle.cfg)
 
@@ -528,12 +593,20 @@ def render_live_mode(bundle: InferenceBundle, artifacts_dir: Path) -> None:
                     f"Live: **{bundle.emotion_labels[e_idx].upper()}** + **{bundle.intensity_labels[i_idx].upper()}** "
                     f"| RMS: {rms:.4f}"
                 )
-                render_multitask_outputs(
-                    emotion_probs,
-                    intensity_probs,
-                    bundle.emotion_labels,
-                    bundle.intensity_labels,
-                )
+                if show_probability_details:
+                    render_multitask_outputs(
+                        emotion_probs,
+                        intensity_probs,
+                        bundle.emotion_labels,
+                        bundle.intensity_labels,
+                    )
+                else:
+                    st.metric("Emotion", bundle.emotion_labels[e_idx].upper(), f"{float(emotion_probs[e_idx]):.1%}")
+                    st.metric(
+                        "Intensity",
+                        bundle.intensity_labels[i_idx].upper(),
+                        f"{float(intensity_probs[i_idx]):.1%}",
+                    )
             else:
                 probs = predict_single_task(bundle, waveform)
                 prev_emo = st.session_state[emo_ema_key]
@@ -546,7 +619,18 @@ def render_live_mode(bundle: InferenceBundle, artifacts_dir: Path) -> None:
                 status_placeholder.success(
                     f"Live: **{bundle.emotion_labels[top_idx].upper()}** ({float(probs[top_idx]):.1%}) | RMS: {rms:.4f}"
                 )
-                render_single_task_outputs(probs, bundle.emotion_labels)
+                if show_probability_details:
+                    render_single_task_outputs(probs, bundle.emotion_labels)
+                else:
+                    st.metric("Emotion", bundle.emotion_labels[top_idx].upper(), f"{float(probs[top_idx]):.1%}")
+
+        if show_spectrogram and (now - float(st.session_state[spec_key])) >= DEFAULT_SPECTROGRAM_REFRESH_SECONDS:
+            with spectrogram_placeholder.container():
+                render_live_spectrogram(analysis_window, bundle.cfg.sample_rate)
+            st.session_state[spec_key] = now
+        else:
+            if not show_spectrogram:
+                spectrogram_placeholder.empty()
 
 
 def render_clip_mode(bundle: InferenceBundle) -> None:
