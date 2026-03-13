@@ -13,15 +13,29 @@ import torch
 from sklearn.metrics import classification_report, confusion_matrix, f1_score
 from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
 
+from emotion2vec_backend import (
+    DEFAULT_EMOTION2VEC_MODEL_ID,
+    EMOTION2VEC_CANONICAL_LABELS,
+    load_emotion2vec_model,
+    predict_emotion2vec,
+)
 from ser_multitask import MultiTaskEmotionModel, is_lfs_pointer_file, load_first_valid_checkpoint
-from ser_pipeline import AudioConfig, FeatureConfig, discover_records, ensure_audio_length, extract_handcrafted_features
+from ser_pipeline import (
+    AudioConfig,
+    FeatureConfig,
+    discover_records,
+    ensure_audio_length,
+    extract_handcrafted_features,
+    split_by_actor,
+)
 
 
 @dataclass
 class LoadedModel:
+    backend_name: str
     task_type: str
     model: object
-    feature_extractor: AutoFeatureExtractor
+    feature_extractor: AutoFeatureExtractor | None
     cfg: AudioConfig
     emotion_labels: list[str]
     intensity_labels: list[str]
@@ -34,7 +48,9 @@ class LoadedModel:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate streaming SER on test split using chunked inference.")
+    parser.add_argument("--backend", choices=["artifacts", "emotion2vec"], default="artifacts")
     parser.add_argument("--artifacts-dir", type=str, default="artifacts")
+    parser.add_argument("--emotion2vec-model-id", type=str, default=DEFAULT_EMOTION2VEC_MODEL_ID)
     parser.add_argument("--data-dir", type=str, default="actors_speech")
     parser.add_argument("--chunk-seconds", type=float, default=0.50)
     parser.add_argument("--window-seconds", type=float, default=3.0)
@@ -104,7 +120,29 @@ def _build_feature_stats(metadata: dict) -> tuple[np.ndarray | None, np.ndarray 
     return mean_arr, std_arr
 
 
-def load_model_bundle(artifacts_dir: Path, device: torch.device) -> tuple[LoadedModel, dict]:
+def _load_emotion2vec_bundle(model_id: str, device: torch.device) -> tuple[LoadedModel, dict]:
+    model = load_emotion2vec_model(model_id=model_id)
+    loaded = LoadedModel(
+        backend_name="emotion2vec",
+        task_type="single_task",
+        model=model,
+        feature_extractor=None,
+        cfg=AudioConfig(sample_rate=16_000, duration_seconds=4.0),
+        emotion_labels=list(EMOTION2VEC_CANONICAL_LABELS),
+        intensity_labels=[],
+        device=device,
+        use_handcrafted_features=False,
+        feature_cfg=None,
+        feature_mean=None,
+        feature_std=None,
+    )
+    return loaded, {}
+
+
+def load_model_bundle(backend: str, artifacts_dir: Path, device: torch.device, emotion2vec_model_id: str) -> tuple[LoadedModel, dict]:
+    if backend == "emotion2vec":
+        return _load_emotion2vec_bundle(emotion2vec_model_id, device)
+
     metadata_path = artifacts_dir / "metadata.json"
     if not metadata_path.exists():
         raise FileNotFoundError(f"Missing metadata: {metadata_path}")
@@ -176,6 +214,7 @@ def load_model_bundle(artifacts_dir: Path, device: torch.device) -> tuple[Loaded
         feature_mean, feature_std = _build_feature_stats(metadata)
 
         loaded = LoadedModel(
+            backend_name="custom",
             task_type=task_type,
             model=model,
             feature_extractor=feature_extractor,
@@ -197,6 +236,7 @@ def load_model_bundle(artifacts_dir: Path, device: torch.device) -> tuple[Loaded
     model.eval()
 
     loaded = LoadedModel(
+        backend_name="custom",
         task_type="single_task",
         model=model,
         feature_extractor=feature_extractor,
@@ -232,6 +272,11 @@ def prepare_aux_features(bundle: LoadedModel, waveform: np.ndarray) -> torch.Ten
 
 
 def predict_single(bundle: LoadedModel, waveform: np.ndarray) -> np.ndarray:
+    if bundle.backend_name == "emotion2vec":
+        return predict_emotion2vec(bundle.model, waveform, bundle.cfg.sample_rate)
+
+    if bundle.feature_extractor is None:
+        raise ValueError("feature_extractor is required for the current backend.")
     encoded = bundle.feature_extractor(
         waveform,
         sampling_rate=bundle.cfg.sample_rate,
@@ -268,16 +313,24 @@ def predict_multi(bundle: LoadedModel, waveform: np.ndarray) -> tuple[np.ndarray
 def evaluate_streaming(args: argparse.Namespace) -> Dict:
     artifacts_dir = Path(args.artifacts_dir)
     device = resolve_device(args.device)
-    bundle, metadata = load_model_bundle(artifacts_dir, device=device)
+    bundle, metadata = load_model_bundle(
+        backend=args.backend,
+        artifacts_dir=artifacts_dir,
+        device=device,
+        emotion2vec_model_id=args.emotion2vec_model_id,
+    )
 
     records = discover_records(args.data_dir)
     test_actor_ids = set(int(x) for x in metadata.get("test_actor_ids", []))
+    if not test_actor_ids:
+        _, _, test_records = split_by_actor(records, val_size=0.15, test_size=0.15, seed=42)
+        test_actor_ids = {record.actor_id for record in test_records}
 
     if bundle.task_type == "emotion_intensity_multitask":
         allowed_emotions = set(bundle.emotion_labels)
         records = [r for r in records if r.actor_id in test_actor_ids and r.ravdess_emotion in allowed_emotions]
     else:
-        records = [r for r in records if r.actor_id in test_actor_ids]
+        records = [r for r in records if r.actor_id in test_actor_ids and r.ravdess_emotion in set(bundle.emotion_labels)]
 
     if args.max_records > 0:
         records = records[: args.max_records]
@@ -372,6 +425,7 @@ def evaluate_streaming(args: argparse.Namespace) -> Dict:
 
     result: Dict[str, object] = {
         "artifacts_dir": str(artifacts_dir.resolve()),
+        "backend": args.backend,
         "task_type": bundle.task_type,
         "num_records": len(records),
         "chunk_seconds": float(args.chunk_seconds),

@@ -16,6 +16,13 @@ import streamlit as st
 import torch
 from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
 
+from emotion2vec_backend import (
+    DEFAULT_EMOTION2VEC_MODEL_ID,
+    EMOTION2VEC_CANONICAL_LABELS,
+    emotion2vec_available,
+    load_emotion2vec_model,
+    predict_emotion2vec,
+)
 from ser_multitask import MultiTaskEmotionModel, is_lfs_pointer_file, load_first_valid_checkpoint
 from ser_pipeline import AudioConfig, FeatureConfig, ensure_audio_length, extract_handcrafted_features
 
@@ -38,9 +45,10 @@ DEFAULT_SPECTROGRAM_REFRESH_SECONDS = 1.5
 
 @dataclass
 class InferenceBundle:
+    backend_name: str
     task_type: str  # "single_task" or "emotion_intensity_multitask"
     model: object
-    feature_extractor: AutoFeatureExtractor
+    feature_extractor: AutoFeatureExtractor | None
     cfg: AudioConfig
     emotion_labels: list[str]
     intensity_labels: list[str]
@@ -182,6 +190,7 @@ def _load_multitask_bundle(base: Path, metadata: dict, device: torch.device) -> 
     )
 
     return InferenceBundle(
+        backend_name="custom",
         task_type="emotion_intensity_multitask",
         model=model,
         feature_extractor=feature_extractor,
@@ -211,6 +220,7 @@ def _load_single_task_bundle(base: Path, metadata: dict, device: torch.device) -
     model.to(device)
 
     return InferenceBundle(
+        backend_name="custom",
         task_type="single_task",
         model=model,
         feature_extractor=feature_extractor,
@@ -221,15 +231,32 @@ def _load_single_task_bundle(base: Path, metadata: dict, device: torch.device) -
     )
 
 
+def _load_emotion2vec_bundle(model_id: str, device: torch.device) -> InferenceBundle:
+    model = load_emotion2vec_model(model_id=model_id)
+    return InferenceBundle(
+        backend_name="emotion2vec",
+        task_type="single_task",
+        model=model,
+        feature_extractor=None,
+        cfg=AudioConfig(sample_rate=16_000, duration_seconds=4.0),
+        emotion_labels=list(EMOTION2VEC_CANONICAL_LABELS),
+        intensity_labels=[],
+        device=device,
+    )
+
+
 @st.cache_resource(show_spinner=False)
-def load_model_bundle(artifacts_dir: str) -> InferenceBundle:
+def load_model_bundle(backend_name: str, artifacts_dir: str, emotion2vec_model_id: str) -> InferenceBundle:
+    device = resolve_device()
+    if backend_name == "emotion2vec":
+        return _load_emotion2vec_bundle(emotion2vec_model_id, device)
+
     base = Path(artifacts_dir)
     metadata_path = base / "metadata.json"
 
     with metadata_path.open("r", encoding="utf-8") as f:
         metadata = json.load(f)
 
-    device = resolve_device()
     task_type = str(metadata.get("task_type", "")).strip()
 
     if task_type == "emotion_intensity_multitask":
@@ -281,6 +308,11 @@ def _prepare_aux_features(bundle: InferenceBundle, waveform: np.ndarray) -> torc
 
 
 def predict_single_task(bundle: InferenceBundle, waveform: np.ndarray) -> np.ndarray:
+    if bundle.backend_name == "emotion2vec":
+        return predict_emotion2vec(bundle.model, waveform, bundle.cfg.sample_rate)
+
+    if bundle.feature_extractor is None:
+        raise ValueError("feature_extractor is required for the current backend.")
     encoded = bundle.feature_extractor(
         waveform,
         sampling_rate=bundle.cfg.sample_rate,
@@ -478,7 +510,7 @@ def render_live_mode(bundle: InferenceBundle, artifacts_dir: Path) -> None:
     show_spectrogram = st.checkbox("Show live spectrogram", value=True)
     show_probability_details = st.checkbox("Show live probability details", value=False)
 
-    stream_key = f"live_{str(artifacts_dir).replace('/', '_')}"
+    stream_key = f"live_{bundle.backend_name}_{str(artifacts_dir).replace('/', '_')}"
     buf_key = state_key(stream_key, "buffer")
     emo_ema_key = state_key(stream_key, "emotion_ema")
     int_ema_key = state_key(stream_key, "intensity_ema")
@@ -671,25 +703,50 @@ def render_app() -> None:
     st.title("🎙️ Speech Emotion Detector")
     st.caption("Hybrid HuBERT + engineered-feature model with live inference.")
 
-    default_artifacts = default_artifacts_dir()
-    artifacts_dir = Path(
-        st.text_input("Artifacts directory", value=default_artifacts, help="Folder containing model + metadata.")
+    backend_label = st.selectbox(
+        "Inference backend",
+        options=["Custom artifacts", "emotion2vec_plus_seed"],
+        help="Switch between the local trained multitask model and the optional off-the-shelf emotion2vec model.",
     )
+    backend_name = "emotion2vec" if backend_label == "emotion2vec_plus_seed" else "custom"
 
-    if not _artifacts_ready(artifacts_dir):
-        st.error(
-            "Trained artifacts not found. Train first with:\n\n"
-            "`python train_model.py --data-dir actors_speech --output-dir artifacts`"
+    artifacts_dir = Path(default_artifacts_dir())
+    emotion2vec_model_id = DEFAULT_EMOTION2VEC_MODEL_ID
+    if backend_name == "custom":
+        artifacts_dir = Path(
+            st.text_input("Artifacts directory", value=str(artifacts_dir), help="Folder containing model + metadata.")
         )
-        return
+        if not _artifacts_ready(artifacts_dir):
+            st.error(
+                "Trained artifacts not found. Train first with:\n\n"
+                "`python train_model.py --data-dir actors_speech --output-dir artifacts`"
+            )
+            return
+    else:
+        emotion2vec_model_id = st.text_input(
+            "emotion2vec model id",
+            value=DEFAULT_EMOTION2VEC_MODEL_ID,
+            help="FunASR/Hugging Face model id used for the off-the-shelf backend.",
+        )
+        if not emotion2vec_available():
+            st.warning(
+                "emotion2vec backend needs optional dependencies. Install with:\n\n"
+                "`pip install -U funasr modelscope`"
+            )
+            return
 
     try:
-        bundle = load_model_bundle(str(artifacts_dir))
+        bundle = load_model_bundle(backend_name, str(artifacts_dir), emotion2vec_model_id)
     except Exception as exc:
-        st.error(f"Failed to load artifacts: {exc}")
+        st.error(f"Failed to load backend: {exc}")
         return
 
-    if bundle.task_type == "emotion_intensity_multitask":
+    if bundle.backend_name == "emotion2vec":
+        st.info(
+            "Loaded off-the-shelf emotion2vec backend: emotion-only inference "
+            f"({', '.join(bundle.emotion_labels)}). Intensity prediction is not available in this mode."
+        )
+    elif bundle.task_type == "emotion_intensity_multitask":
         aux_info = "with engineered features" if bundle.use_handcrafted_features else "without engineered features"
         st.info(
             "Loaded multi-task model: predicts both emotion class and intensity degree "

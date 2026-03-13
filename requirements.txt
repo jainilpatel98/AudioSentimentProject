@@ -10,3 +10,4 @@ torch>=2.6,<3.0
 transformers>=4.50,<6.0
 streamlit>=1.41,<2.0
 streamlit-webrtc>=0.63,<1.0
+torchaudio
