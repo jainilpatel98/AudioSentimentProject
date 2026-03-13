@@ -389,3 +389,19 @@ cp -R artifacts_fullrun_final artifacts
 --------------------------------------
 streamlit run streamlit_app.py
 --------------------------------------
+MPLCONFIGDIR=/tmp python train_model.py \
+  --data-dir actors_speech \
+  --output-dir artifacts_fullrun_final \
+  --epochs 30 \
+  --batch-size 8 \
+  --patience 5 \
+  --duration-seconds 10 \
+  --augment-copies 2 \
+  --feature-stats-max-records 600 \
+  --emotion-loss focal \
+  --focal-gamma 2.0 \
+  --unfreeze-last-n-layers 4 \
+  --freeze-feature-encoder-epochs 1 \
+  --offline \
+  --num-workers 0 \
+  --device mps
