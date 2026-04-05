@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Emotion AI Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Segoe+UI:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #f0f4f8;
+            --panel-bg: #ffffff;
+            --primary: #004B87; /* UMKC Blue */
+            --accent: #E2A829;  /* UMKC Gold */
+            --text-dark: #1e293b;
+            --text-light: #64748b;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-dark);
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 320px;
+            background-color: var(--primary);
+            color: white;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+        }
+
+        .sidebar h2 {
+            margin-bottom: 0.5rem;
+            color: var(--accent);
+            font-size: 1.5rem;
+        }
+
+        .sidebar p {
+            font-size: 0.95rem;
+            color: #d1e0eb;
+            margin-bottom: 2rem;
+            line-height: 1.5;
+        }
+
+        .upload-area {
+            background-color: rgba(255,255,255,0.1);
+            border: 2px dashed rgba(255,255,255,0.4);
+            border-radius: 8px;
+            padding: 2rem 1rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-bottom: 1.5rem;
+        }
+
+        .upload-area:hover {
+            background-color: rgba(255,255,255,0.2);
+            border-color: var(--accent);
+        }
+
+        .upload-area input {
+            display: none;
+        }
+
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            padding: 2rem 3rem;
+            overflow-y: auto;
+        }
+
+        .header {
+            margin-bottom: 2rem;
+            border-bottom: 2px solid #e2e8f0;
+            padding-bottom: 1rem;
+        }
+
+        .header h1 {
+            color: var(--primary);
+            font-size: 2.2rem;
+        }
+
+        .panel {
+            background: var(--panel-bg);
+            border-radius: 12px;
+            padding: 2rem;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+            margin-bottom: 2rem;
+            display: none; /* Hidden strictly until upload */
+        }
+
+        .panel h3 {
+            color: var(--primary);
+            margin-bottom: 1.5rem;
+            font-size: 1.3rem;
+        }
+
+        /* Visualizations */
+        .visualizations {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+            margin-bottom: 1rem;
+        }
+
+        .chart-box {
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 1rem;
+            background: #f8fafc;
+        }
+
+        .chart-box h4 {
+            margin-bottom: 1rem;
+            color: var(--text-light);
+        }
+
+        canvas {
+            width: 100%;
+            height: 180px;
+            background-color: white;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+        }
+
+        /* Progress Bar */
+        .progress-container {
+            width: 100%;
+            background-color: #e2e8f0;
+            border-radius: 8px;
+            overflow: hidden;
+            height: 16px;
+            margin-top: 10px;
+            margin-bottom: 5px;
+        }
+
+        .progress-bar {
+            width: 0%;
+            height: 100%;
+            background-color: var(--primary);
+            transition: width 0.1s linear;
+        }
+
+        .progress-status {
+            font-size: 0.95rem;
+            color: var(--text-light);
+            font-style: italic;
+        }
+
+        /* Result */
+        .result-box {
+            background: #e0f2fe;
+            border: 3px solid var(--primary);
+            border-radius: 12px;
+            padding: 2rem;
+            text-align: center;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.5s ease;
+        }
+
+        .result-box.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .result-box h1 {
+            color: var(--primary);
+            font-size: 3rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .result-box p {
+            color: var(--text-dark);
+            font-size: 1.2rem;
+            font-weight: 600;
+        }
+        
+        #audio-player {
+            width: 100%;
+            margin-top: 1rem;
+            outline: none;
+            display: none;
+        }
+
+        .placeholder-text {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-light);
+            font-size: 1.2rem;
+            text-align: center;
+            padding-top: 20%;
+        }
+        
+    </style>
+</head>
+<body>
+
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <h2>Control Panel</h2>
+        <p>Interactive Pipeline Demo for Emotion Recognition AI.</p>
+        
+        <label class="upload-area" for="file-upload">
+            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="color: var(--accent); margin-bottom: 10px;">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+            </svg>
+            <br>
+            <span id="upload-text">Click here to select a .WAV file</span>
+            <input id="file-upload" type="file" accept="audio/wav,audio/mp3">
+        </label>
+        
+        <audio id="audio-player" controls></audio>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <div class="header">
+            <h1>Emotion Recognition Intelligence Dashboard</h1>
+            <p style="color: var(--text-light); font-size: 1.1rem; margin-top: 0.5rem;">Acoustic Feature Extraction & PyTorch CNN Analysis</p>
+        </div>
+
+        <div id="welcome-msg" class="placeholder-text">
+            👈 Awaiting audio file... Please upload a RAVDESS .wav file over on the left.
+        </div>
+
+        <!-- Hidden processing panels -->
+        <div id="processing-panel" class="panel">
+            <h3>1. Acoustic Feature Mapping</h3>
+            <div class="visualizations">
+                <div class="chart-box">
+                    <h4>Raw Audio Waveform</h4>
+                    <canvas id="waveCanvas"></canvas>
+                </div>
+                <div class="chart-box">
+                    <h4>Mel-Spectrogram Overlay</h4>
+                    <canvas id="specCanvas"></canvas>
+                </div>
+            </div>
+
+            <h3 style="margin-top: 2rem;">2. Neural Network Classification</h3>
+            <p class="progress-status" id="status-text">Initializing parameters and loading model weights...</p>
+            <div class="progress-container">
+                <div class="progress-bar" id="pbar"></div>
+            </div>
+            
+            <div id="result-container" class="result-box" style="margin-top: 2.5rem; display: none;">
+                <h1 id="predicted-emotion">HAPPY</h1>
+                <p>Confidence: 94.2% | State: High Arousal</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Script to run mock animations -->
+    <script>
+        const fileUpload = document.getElementById('file-upload');
+        const audioPlayer = document.getElementById('audio-player');
+        const uploadText = document.getElementById('upload-text');
+        const welcomeMsg = document.getElementById('welcome-msg');
+        const processingPanel = document.getElementById('processing-panel');
+        const pbar = document.getElementById('pbar');
+        const statusText = document.getElementById('status-text');
+        const resultContainer = document.getElementById('result-container');
+        const predictedEmotion = document.getElementById('predicted-emotion');
+        
+        const waveCanvas = document.getElementById('waveCanvas').getContext('2d');
+        const specCanvas = document.getElementById('specCanvas').getContext('2d');
+
+        // Fake Data drawing
+        function drawFakeWave() {
+            waveCanvas.clearRect(0,0,300,180);
+            waveCanvas.beginPath();
+            waveCanvas.moveTo(0, 90);
+            for(let i=0; i<400; i+=2) {
+                let y = 90 + (Math.sin(i*0.1) * Math.random() * 40);
+                if (i > 100 && i < 250) y += (Math.random() * 80 - 40); // larger amplitude in middle
+                waveCanvas.lineTo(i, y);
+            }
+            waveCanvas.strokeStyle = '#004B87';
+            waveCanvas.lineWidth = 1.5;
+            waveCanvas.stroke();
+        }
+
+        function drawFakeSpectrogram() {
+            const width = 400;
+            const height = 180;
+            const imgData = specCanvas.createImageData(width, height);
+            for (let i = 0; i < imgData.data.length; i += 4) {
+                // Generate a generic spectrogram look (gradient noise)
+                let heat = Math.random() * 255;
+                let r = heat;
+                let g = heat * 0.4;
+                let b = 150 - (heat * 0.5);
+                imgData.data[i+0] = r;
+                imgData.data[i+1] = g;
+                imgData.data[i+2] = b;
+                imgData.data[i+3] = 255;
+            }
+            specCanvas.putImageData(imgData, 0, 0);
+        }
+
+        const emotions = ["HAPPY", "ANGRY", "CALM", "SAD", "NEUTRAL"];
+
+        fileUpload.addEventListener('change', function(e) {
+            if(e.target.files.length > 0) {
+                const file = e.target.files[0];
+                uploadText.textContent = file.name;
+                
+                // Allow playing the uploaded audio
+                const fileURL = URL.createObjectURL(file);
+                audioPlayer.src = fileURL;
+                audioPlayer.style.display = "block";
+                
+                // UI Transitions
+                welcomeMsg.style.display = "none";
+                processingPanel.style.display = "block";
+                resultContainer.style.display = "none";
+                resultContainer.classList.remove('show');
+                
+                // Draw graphs
+                drawFakeWave();
+                drawFakeSpectrogram();
+
+                // Run fake progress bar
+                let progress = 0;
+                pbar.style.width = '0%';
+                
+                const interval = setInterval(() => {
+                    progress += 1;
+                    pbar.style.width = progress + '%';
+                    
+                    if (progress === 15) statusText.textContent = "Extracting MFCC arrays via Librosa...";
+                    if (progress === 45) statusText.textContent = "Passing spatial matrices to CNN Layers...";
+                    if (progress === 80) statusText.textContent = "Calculating Softmax probability distributions...";
+                    
+                    if (progress >= 100) {
+                        clearInterval(interval);
+                        statusText.textContent = "Analysis Complete.";
+                        
+                        // Pick random emotion or cycle
+                        const randomEmo = emotions[Math.floor(Math.random() * emotions.length)];
+                        predictedEmotion.textContent = randomEmo;
+                        
+                        resultContainer.style.display = "block";
+                        // small delay to trigger CSS transition
+                        setTimeout(() => resultContainer.classList.add('show'), 50);
+                    }
+                }, 40); // 4 seconds total
+            }
+        });
+    </script>
+</body>
+</html>
