@@ -1,0 +1,45 @@
+{
+  "emotion_accuracy": 0.5833333333333334,
+  "emotion_balanced_accuracy": 0.58203125,
+  "intensity_accuracy": 0.7208333333333333,
+  "intensity_balanced_accuracy": 0.7248883928571428,
+  "joint_accuracy": 0.4583333333333333,
+  "joint_macro_f1": 0.46366804692891644,
+  "emotion_macro_f1": 0.5862942688987904,
+  "intensity_macro_f1": 0.7207897067250091,
+  "best_val_composite_score": 1.174724424708113,
+  "num_train_samples": 960,
+  "num_val_samples": 240,
+  "num_test_samples": 240,
+  "model_name": "superb/hubert-base-superb-er",
+  "task_type": "emotion_intensity_multitask",
+  "emotion_scheme": "all8",
+  "use_handcrafted_features": true,
+  "device": "mps",
+  "per_actor": {
+    "1": {
+      "num_samples": 60,
+      "emotion_accuracy": 0.5833333333333334,
+      "intensity_accuracy": 0.75,
+      "joint_accuracy": 0.4166666666666667
+    },
+    "9": {
+      "num_samples": 60,
+      "emotion_accuracy": 0.38333333333333336,
+      "intensity_accuracy": 0.5166666666666667,
+      "joint_accuracy": 0.25
+    },
+    "17": {
+      "num_samples": 60,
+      "emotion_accuracy": 0.6666666666666666,
+      "intensity_accuracy": 0.8166666666666667,
+      "joint_accuracy": 0.5833333333333334
+    },
+    "19": {
+      "num_samples": 60,
+      "emotion_accuracy": 0.7,
+      "intensity_accuracy": 0.8,
+      "joint_accuracy": 0.5833333333333334
+    }
+  }
+}
