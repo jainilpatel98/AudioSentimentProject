@@ -1,0 +1,340 @@
+Speech Emotion Recognition Project Report
+
+Group Members
+- Joshalynn
+- Janil
+- Diego
+- Tina
+
+1. Project Overview
+This project focuses on Speech Emotion Recognition (SER) using the RAVDESS dataset. The main goal was to build a model that can listen to speech audio and predict the speaker's emotion. We also extended the problem beyond simple emotion categories by modeling emotion intensity as a second task. In addition to offline testing, we explored how the model behaves in a live Streamlit application for near real-time speech analysis.
+
+Our final approach was a hybrid system:
+- a pretrained speech transformer backbone for deep audio representations
+- an engineered-feature branch for interpretable acoustic features
+- a multi-task output head for emotion class and intensity level
+
+2. Problem Statement
+The project was designed to answer the following questions:
+- Can we classify emotional speech into the full RAVDESS emotion set?
+- Can we also predict the degree of emotion (normal vs strong)?
+- Can we combine classic feature engineering with a modern transformer model?
+- Can the trained model be used in a live Streamlit app?
+
+3. Dataset Description
+We used the RAVDESS speech dataset. This dataset is well suited for emotion recognition because it contains acted speech recordings with labeled emotions and emotion intensity.
+
+Important characteristics of the dataset:
+- 24 actors
+- 60 speech files per actor
+- total speech files used: 1440
+- two fixed spoken statements
+- labeled emotion and labeled intensity
+
+The full emotion label set used in our project was:
+- neutral
+- calm
+- happy
+- sad
+- angry
+- fearful
+- disgust
+- surprised
+
+The intensity labels were:
+- normal
+- strong
+
+4. Understanding the Naming Convention
+A major part of the project was correctly understanding the dataset file names. RAVDESS uses a structured naming format:
+- MM-VC-EE-II-SS-RR-AA
+
+Meaning:
+- MM: modality
+- VC: vocal channel
+- EE: emotion
+- II: intensity
+- SS: statement
+- RR: repetition
+- AA: actor
+
+This was important because it allowed us to parse:
+- the emotion label
+- the intensity label
+- the spoken statement
+- the actor identity
+
+This information was used to build metadata and to make speaker-safe train/validation/test splits.
+
+5. Data Exploration and Understanding
+We performed exploratory analysis in the notebook to understand both the raw audio and the metadata.
+
+Our EDA included:
+- checking class distributions for emotion and intensity
+- visualizing waveforms
+- visualizing mel spectrograms
+- comparing original and augmented audio examples
+- projecting engineered features with PCA, LDA, and nonlinear visualizations
+- analyzing how features differ across emotions
+
+The main insight from the EDA was that some emotions have overlapping acoustic patterns, so simple clustering is not enough to separate all classes cleanly. This supported the decision to use both engineered features and a pretrained transformer backbone.
+
+6. Data Cleaning and Preprocessing
+The cleaning and preprocessing pipeline focused on making audio consistent for modeling.
+
+The key steps were:
+- load audio as mono
+- resample to 16 kHz
+- pad or crop each clip to a fixed duration for model input
+- extract labels and metadata from the filename
+- normalize handcrafted features using statistics computed only from the training split
+
+Important note:
+- In the main project pipeline, we did not use silence trimming as the default preprocessing step for the final model run.
+- In the notebook, we kept the audio preprocessing simple and consistent with the project direction we decided to present.
+
+Why this mattered:
+- fixed-length audio is needed for batching and transformer input
+- training-only normalization avoids data leakage
+- actor-aware splitting avoids speaker leakage between train and test sets
+
+7. Train/Validation/Test Split Strategy
+A very important design decision was to split the data by actor, not by random clip.
+
+Final split sizes:
+- train: 960 clips
+- validation: 240 clips
+- test: 240 clips
+
+Why actor-wise splitting matters:
+- if the same speaker appears in both training and test data, results can be misleadingly high
+- actor-wise splitting gives a more realistic estimate of how well the model generalizes to unseen voices
+
+8. Feature Engineering
+A major focus of the project was feature engineering. We wanted the notebook and report to show that we were not only using a pretrained model, but also understanding which acoustic features matter for emotion.
+
+The handcrafted feature branch contained 489 engineered features. These included:
+
+Temporal and energy features:
+- zero crossing rate (ZCR)
+- root mean square energy (RMS)
+
+Spectral shape features:
+- spectral centroid
+- spectral bandwidth
+- spectral rolloff
+- spectral flatness
+
+Cepstral features:
+- MFCC statistics
+- delta MFCC statistics
+
+Time-frequency features:
+- log-mel spectrogram statistics
+- delta log-mel statistics
+- delta-delta log-mel statistics
+
+Harmonic and pitch features:
+- chroma statistics
+- pitch statistics
+- voiced ratio
+
+Why these features are important:
+- energy features help distinguish stronger emotions such as anger from softer emotions such as calm
+- spectral features capture timbre and brightness differences
+- MFCCs summarize vocal tract and speech texture information
+- log-mel features preserve rich time-frequency emotion cues
+- pitch and voicing are especially relevant for emotional expressiveness
+
+9. Data Augmentation
+We explored augmentation as a way to make the model more robust. The codebase includes a broader augmentation pipeline, but for the notebook and simplified presentation we kept only conservative augmentations.
+
+Conservative augmentations kept in the notebook:
+- additive noise
+- time shift
+
+Augmentations explored in the broader codebase:
+- pitch shift
+- time stretch
+- random gain
+- same-label cross-speaker mixing
+
+Final presentation decision:
+- we chose not to rely on cross-speaker mixing in the notebook explanation because it complicated the story and was not the clearest way to explain emotion-preserving augmentation
+- for the final recorded full run in artifacts_fullrun_final, augment_copies was set to 0, so augmentation was effectively not active during that run
+
+10. Model Architecture
+Our final model was a hybrid multi-task architecture.
+
+Backbone:
+- superb/hubert-base-superb-er
+
+Branches:
+- transformer audio representation branch
+- handcrafted acoustic feature branch
+
+Fusion:
+- the transformer embedding and engineered features were fused before classification
+
+Outputs:
+- emotion classification head
+- intensity classification head
+
+Why this architecture was chosen:
+- transformer features capture complex contextual information from raw speech
+- engineered features preserve interpretable prosody and spectral information
+- the combination is stronger than relying on only one representation family
+- multi-task learning allows the model to learn both emotion category and emotional strength
+
+11. Training Approach
+The project training pipeline used:
+- focal loss for emotion classification
+- label smoothing
+- class balancing
+- warmup plus cosine learning-rate scheduling
+- partial transformer unfreezing
+- early stopping based on validation performance
+
+Important training settings from the strongest completed run:
+- model: superb/hubert-base-superb-er
+- epochs: 50
+- batch size: 8
+- learning rate: 1.5e-5
+- duration: 2.5 seconds
+- emotion loss: focal loss
+- focal gamma: 2.0
+- unfreeze last transformer layers: 2
+- handcrafted features: enabled
+- device: MPS
+- augment copies: 0
+
+12. Evaluation Metrics
+We evaluated the model in several ways:
+- emotion accuracy
+- emotion macro F1
+- intensity accuracy
+- intensity macro F1
+- joint accuracy for both tasks together
+- confusion matrices
+- per-actor performance
+- streaming latency and streaming accuracy
+
+Why macro F1 matters:
+- macro F1 gives equal importance to each class
+- this is important in emotion recognition because some emotions are harder than others
+
+13. Final Offline Test Results
+From artifacts_fullrun_final/metrics.json, the final offline test results were:
+
+Emotion task:
+- emotion accuracy: 0.5375
+- emotion balanced accuracy: 0.5508
+- emotion macro F1: 0.5414
+- emotion weighted F1: 0.5412
+
+Intensity task:
+- intensity accuracy: 0.7792
+- intensity balanced accuracy: 0.7734
+- intensity macro F1: 0.7749
+- intensity weighted F1: 0.7770
+
+Joint task:
+- joint accuracy: 0.4125
+- joint macro F1: 0.4063
+
+Interpretation:
+- the model was much stronger on intensity than on full 8-class emotion recognition
+- the emotion results are reasonable for a speaker-independent setup, but not yet strong enough to call near-perfect classification
+- the hybrid design was defensible and produced usable results, especially for offline prediction
+
+14. Per-Actor Findings
+Per-actor results showed that performance varied by speaker. For example:
+- actor 19 had the strongest emotion accuracy: 0.6833
+- actor 9 was weaker: 0.4500
+
+This suggests that speaker-specific expression style still affects performance, even with actor-wise splitting.
+
+15. Streaming and Live Inference Findings
+We also evaluated the model in a streaming setting to understand how it behaves in a live Streamlit app.
+
+Streaming results from artifacts_fullrun_final/streaming_metrics.json:
+- emotion final accuracy: 0.2375
+- emotion online accuracy: 0.1818
+- intensity final accuracy: 0.5958
+- intensity online accuracy: 0.5539
+- average latency: 370.31 ms
+- p95 latency: 701.97 ms
+
+Key finding:
+- offline results were much better than streaming results
+
+Why streaming is harder:
+- live audio contains partial speech windows
+- microphone audio is noisier than offline files
+- there is more timing instability in rolling-window prediction
+- short live chunks may not contain enough emotional context
+
+This was one of the most important findings of the project: a model that performs reasonably offline may still struggle in real-time use.
+
+16. What Worked Well
+The strongest parts of the project were:
+- correct understanding of RAVDESS metadata and naming conventions
+- actor-wise splitting to prevent leakage
+- strong feature engineering with interpretable acoustic features
+- hybrid model architecture combining deep learning and engineered features
+- multi-task learning for emotion plus intensity
+- notebook visualizations that explain why the features matter
+
+17. What Did Not Work As Well
+The main challenges were:
+- full 8-class emotion recognition remained difficult
+- some emotions were confused with each other
+- streaming/live inference was much weaker than offline evaluation
+- heavier augmentation ideas sometimes made the presentation story less clear or were not reliably helpful
+- real-time performance introduced extra noise and instability
+
+18. Main Findings and Lessons Learned
+The project produced several useful lessons:
+
+Finding 1:
+Actor-wise splitting is essential. Without it, emotion recognition performance can appear much better than it really is.
+
+Finding 2:
+Engineered features are still valuable. Even with a transformer backbone, classic acoustic descriptors provide interpretable and useful information.
+
+Finding 3:
+Emotion intensity is easier to predict than full emotion category. Our intensity results were consistently stronger than our full emotion results.
+
+Finding 4:
+Live inference is a separate challenge. A model that works on test files does not automatically work well in a rolling real-time setting.
+
+Finding 5:
+Not every augmentation idea improves the final story or the final model. Conservative and emotionally faithful augmentations are easier to justify.
+
+19. Limitations
+This project still has limitations:
+- acted emotion data is easier than completely natural real-world emotion data
+- the model does not achieve perfect 8-class emotion recognition
+- streaming performance remains a weakness
+- some classes overlap acoustically in ways that are difficult to separate
+- the final best recorded run did not fully exploit augmentation during training
+
+20. Future Improvements
+If the project were extended, the next steps would be:
+- perform longer GPU training runs with careful ablations
+- compare transformer-only versus hybrid more formally
+- improve live inference with better chunking and voice activity handling
+- explore more robust streaming calibration
+- test additional pretrained backbones
+- evaluate whether conservative augmentation improves offline emotion macro F1
+
+21. Conclusion
+This project successfully built an end-to-end speech emotion recognition system using RAVDESS. We combined data understanding, metadata parsing, cleaning, feature engineering, modern deep learning, and live deployment into one pipeline.
+
+The final system showed that:
+- the model can learn meaningful emotion information from speech
+- intensity prediction is relatively strong
+- emotion classification is reasonable but still challenging under speaker-independent evaluation
+- real-time deployment is harder than offline testing and needs additional work
+
+Overall, the project demonstrates both practical implementation skills and a clear understanding of the signal-processing and modeling decisions involved in speech emotion recognition.
