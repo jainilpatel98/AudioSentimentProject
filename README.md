@@ -1,268 +1,253 @@
-# COMP-SCI 5530: PRINCIPLES OF DATA SCIENCE 
+# 🎙️ Emotion Recognition from Speech
 
-# Project: Emotion Recognition from Speech
-## Team Members & Roles:
-* **Tina Nguyen:** [@tinana2k](https://github.com/tinana2k) 
-* **Diego Brown:** [@dsb4k8](https://github.com/dsb4k8)  
-* **Jainil Anilkumar Patel:** [@jainilpatel98](https://github.com/jainilpatel98) 
-* **JoshaLynn Worth:**  [@jrocks1561](https://github.com/Jrocks1561) 
+A machine learning project that classifies human emotions from audio using the RAVDESS dataset and an SVM classifier.
 
-**Introduction:** One of the most basic forms of self-expression is speech, which encompasses a wide range of feelings, including excitement, peacefulness, joy, and rage, to mention a few. It is feasible to rearrange our activities, services, and even products in order to provide a more tailored experience to individual customers by evaluating the emotions that underlie communication.
+**Group Members:** JoshaLynn · Janil · Diego · Tina
 
-**Task:** Create a classifier to recognize and extract emotions from different human voice sound files.
+---
 
-**Data Link:** https://zenodo.org/records/1188976#.Xpaa3i-caAP   
+## 📋 Overview
 
-**Codebbok for labels:** https://app.box.com/s/onp5byblgitoyjt665p0kz5y3uwnhk7w 
+This project trains a Support Vector Machine (SVM) to identify 8 emotions from speech recordings. Beyond the core classifier, we run three additional experiments to better understand model behavior:
 
-# Speech Emotion Recognition (RAVDESS)
+1. **Intensity Breakdown** — Does the model perform better on strongly-expressed emotions vs. normal ones?
+2. **Emotion Grouping** — Does collapsing acoustically similar emotions into broader classes improve accuracy?
+3. **Gender Analysis** — Is there a performance gap between male and female speakers?
+4. **Unsupervised Exploration** — Do emotions form natural clusters in audio feature space (LDA + KMeans)?
 
-This project trains a hybrid Speech Emotion Recognition model and serves live predictions in Streamlit.
+---
 
-## What the model predicts
+## 📁 Dataset
 
-- Emotion class: full RAVDESS set by default
-  - `neutral`, `calm`, `happy`, `sad`, `angry`, `fearful`, `disgust`, `surprised`
-- Emotion intensity (degree): `normal` vs `strong`
+**RAVDESS** — Ryerson Audio-Visual Database of Emotional Speech and Song
 
-This is multi-task prediction (emotion + intensity), not just `happy/sad/other`.
+- 24 professional actors (12 male, 12 female)
+- 8 emotions: `neutral`, `calm`, `happy`, `sad`, `angry`, `fearful`, `disgust`, `surprised`
+- 2 intensity levels: `normal` and `strong`
+- Clean studio audio recordings
+- Labels encoded directly in each filename (e.g. `03-01-05-01-01-01-12.wav`)
 
-## RAVDESS naming convention handled in code
+> **Note:** The `neutral` emotion only appears at normal intensity in RAVDESS, giving it fewer clips than other classes.
 
-Parser uses full filename schema:
+---
 
-- `MM-VC-EE-II-SS-RR-AA`
-- `MM`: modality
-- `VC`: vocal channel
-- `EE`: emotion
-- `II`: intensity
-- `SS`: statement
-- `RR`: repetition
-- `AA`: actor
+## 🔧 Setup & Installation
 
-All fields are decoded and tracked in `SampleRecord` metadata.
+### Prerequisites
 
-## Why this version is stronger
+- Python 3.8+
+- Google Colab (recommended) or local Jupyter environment
 
-- Transformer backbone: `superb/hubert-base-superb-er`
-- Hybrid architecture:
-  - Transformer embedding branch
-  - Engineered acoustic feature branch
-  - Fusion before multi-task heads
-- Feature engineering (handcrafted acoustic descriptors):
-  - ZCR, RMS, spectral centroid/bandwidth/rolloff/flatness
-  - MFCC + delta MFCC statistics
-  - Log-mel spectrogram + delta + delta-delta statistics
-  - Chroma statistics
-  - Pitch/voicing statistics
-- Augmentation pipeline:
-  - Additive noise
-  - Time shift
-  - Pitch shift
-  - Time stretch
-  - Random gain
-  - Same-label cross-speaker mixing ("merge two humans")
-- Training/evaluation:
-  - Actor-wise train/val/test split
-  - Class-weighted losses (and optional focal emotion loss)
-  - Label smoothing
-  - Warmup + cosine LR schedule
-  - Feature encoder freeze warm-start
-  - Optional partial backbone unfreezing (last N transformer layers)
-  - Early stopping on composite validation score
-  - Emotion, intensity, and joint confusion/report outputs
-
-## Why we did each major choice
-
-- Full emotion labels + intensity:
-  - The dataset includes both class and degree, so we model both tasks directly instead of collapsing labels.
-- Actor-wise split:
-  - Prevents speaker leakage and gives a more realistic estimate of generalization to new speakers.
-- Hybrid model (transformer + engineered features):
-  - Transformer captures deep contextual speech patterns.
-  - Engineered features preserve classic prosody/spectral cues (pitch, energy, timbre) that are important for emotion.
-  - Fusion improves robustness when one feature family is weak.
-- Speaker-mix augmentation:
-  - Simulates mixed speaking conditions and improves robustness to speaker variation.
-  - We mix only same-label samples so targets stay consistent.
-- Multi-level evaluation:
-  - We report emotion, intensity, and joint metrics, plus confusion matrices and streaming latency.
-  - This gives both model-quality and real-time app-quality evidence for class presentation.
-
-## What \"best\" means here
-
-- No one can honestly guarantee \"best in the world\" from a single class-project run.
-- This repo now uses strong, defensible practices for this dataset and deployment goal:
-  - modern pretrained backbone
-  - hybrid feature fusion
-  - robust augmentation
-  - leakage-safe splitting
-  - offline + streaming evaluation
-- To claim \"best in class\" for your report, compare at least:
-  - transformer-only (`--no-use-handcrafted-features`)
-  - hybrid (default)
-  - and report both offline test metrics + `streaming_metrics.json`
-
-## Project files
-
-- `train_model.py`: hybrid multi-task training + evaluation + export
-- `evaluate_streaming.py`: streaming/chunked evaluation with latency metrics
-- `ser_pipeline.py`: parsing, labels, augmentation, features, metadata
-- `ser_multitask.py`: shared model definition (training + inference)
-- `streamlit_app.py`: live + clip inference app
-- `scripts/download_data.sh`: download + extract dataset
-
-## Setup
-
-1. Create and activate env:
+### Install Dependencies
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+pip install gdown librosa soundfile scikit-learn pandas numpy matplotlib seaborn
 ```
 
-2. Install dependencies:
+### Download the Dataset
 
-```bash
-pip install -r requirements.txt
+The notebook auto-downloads the dataset from Google Drive on first run using `gdown`. Re-running the cell will not re-download.
+
+```python
+DATA_ZIP = "actors_speech.zip"
+DATA_DIR = "actors_speech"
 ```
 
-3. Download dataset:
+---
 
-```bash
-./scripts/download_data.sh
+## 🗂️ Project Structure
+
+```
+emotion_recognition.ipynb   # Main notebook — all code and analysis
+ground_truth_labels.csv     # Auto-generated metadata for all audio clips
+actors_speech/              # Downloaded RAVDESS dataset
+  Actor_01/
+  Actor_02/
+  ...
+  Actor_24/
 ```
 
-## Train (same entrypoint)
+---
 
-```bash
-python train_model.py --data-dir actors_speech --output-dir artifacts
+## 🔄 Pipeline
+
+```
+1. Load & Preprocess Audio
+         ↓
+2. Exploratory Data Analysis
+         ↓
+3. Train / Test Split (by Actor)
+         ↓
+4. Augment Training Data
+         ↓
+5. Feature Extraction
+         ↓
+6. Train SVM Classifier
+         ↓
+7. Evaluate + Experiments
 ```
 
-Quality-focused run:
+---
 
-```bash
-python train_model.py \
-  --data-dir actors_speech \
-  --output-dir artifacts \
-  --epochs 30 \
-  --batch-size 8 \
-  --augment-copies 4 \
-  --speaker-mix-prob 0.35
+## 🧹 Audio Preprocessing
+
+Every clip is standardized before feature extraction:
+
+| Step | Detail |
+|------|--------|
+| Resample | 16 kHz — standard rate for speech processing |
+| Normalize | Scales amplitude so volume is consistent across speakers |
+| Trim Silence | Strips quiet sections at start/end (`top_db = 20`) |
+| Fixed Length | All clips padded or truncated to 2 seconds |
+
+> **Volume Normalization Check:** We verified using RMS energy that after normalization, `fearful` and `sad` clips (which differ ~3× in raw volume) become nearly identical in energy — confirming the model learns emotional cues, not just loudness.
+
+---
+
+## ✂️ Train / Test Split
+
+Split is done **by actor**, not randomly, to prevent data leakage (same voice appearing in both sets).
+
+- **Test set:** 4 male + 4 female actors (gender-balanced)
+- **Train set:** Remaining 16 actors
+- **Approximate split:** 70% train / 30% test
+
+---
+
+## 🔀 Data Augmentation
+
+Training clips only are augmented to give the model more variety. `MULTIPLY = 2` means each training clip gets 2 extra augmented versions (3× total training data).
+
+Augmentation techniques applied randomly:
+- Gaussian noise injection
+- Time shift (±0.1s)
+- Volume scaling (±20%)
+
+The test set is **never augmented**.
+
+---
+
+## 📊 Feature Extraction
+
+Raw audio is converted to a fixed-length feature vector. Each time-series feature is summarized as `[mean, std, min, max]`.
+
+| Feature | What It Captures |
+|---------|-----------------|
+| MFCCs | Timbral texture of speech |
+| Chroma | Pitch class distribution |
+| Spectral Contrast | Energy differences across frequency bands |
+| Zero Crossing Rate | Noisiness / voicing |
+| RMS Energy | Perceived loudness over time |
+
+---
+
+## 🤖 Model
+
+**Support Vector Machine (SVM)** with an RBF kernel, wrapped in a scikit-learn Pipeline:
+
+```
+StandardScaler → PCA (n=50) → SVC (RBF kernel, class_weight='balanced')
 ```
 
-Emotion-focused run (focal loss + partial unfreezing):
+**Key hyperparameters:**
+- `C = 1`
+- `gamma = 'scale'`
+- `class_weight = 'balanced'` (handles class imbalance from neutral having fewer clips)
+- `probability = True` (enables ROC curve generation)
 
-```bash
-python train_model.py \
-  --data-dir actors_speech \
-  --output-dir artifacts \
-  --emotion-loss focal \
-  --focal-gamma 2.0 \
-  --unfreeze-last-n-layers 4
-```
+> ⚠️ **Note:** Section 18 of the notebook (the initial SVM definition using `PCA(n_components=100)`) was **not used in the final pipeline** due to severe overfitting and extreme memorization of the training data. The final model uses `n_components=50`, which was found to generalize better to unseen actors.
 
-Optional 7-emotion scheme (drops `calm`):
+---
 
-```bash
-python train_model.py --emotion-scheme ekman7
-```
+## 📈 Results
 
-Optional disable engineered feature branch:
+### 8-Class Emotion Classification
 
-```bash
-python train_model.py --no-use-handcrafted-features
-```
+| Metric | Value |
+|--------|-------|
+| **Test Accuracy** | ~51% |
 
-Optional offline mode (use local cache only, no model download attempt):
+> ⚠️ **Overfitting:** The large train-test gap indicates the model memorized training data rather than learning generalizable features. The actor-based split makes this a hard generalization problem.
 
-```bash
-python train_model.py --offline
-```
+**ROC AUC highlights:**
+- Strong performance: `calm`, `surprised`, `angry`, `disgust` (AUC > 0.90)
+- Weaker performance: `sad` (AUC = 0.76), `fearful` / `happy` (~0.86) — these emotions share overlapping acoustic patterns
 
-Resume behavior:
+---
 
-- If the output directory already contains training artifacts, `train_model.py` resumes automatically from the saved checkpoint.
-- To force a fresh run in the same output directory, disable resume explicitly:
+### Experiment 1 — Intensity Breakdown
 
-```bash
-python train_model.py --no-resume-if-exists
-```
+Strong-intensity clips are slightly easier for the model to classify, consistent with the intuition that more expressive recordings produce clearer audio features.
 
-CPU-friendly mode (fast head-only tuning when full backbone fine-tuning is too slow on CPU):
+---
 
-```bash
-python train_model.py \
-  --freeze-backbone \
-  --augment-copies 0 \
-  --epochs 6
-```
+### Experiment 2 — Emotion Grouping (4 Classes)
 
-For best final quality, run full fine-tuning (without `--freeze-backbone`) on a GPU-capable machine.
+Acoustically similar emotions were merged into 4 broader groups:
 
-## Evaluate streaming behavior
+| Group | Emotions |
+|-------|---------|
+| `anger_disgust` | angry, disgust |
+| `sad_calm_neutral` | sad, calm, neutral |
+| `fear_surprise` | fearful, surprised |
+| `happy` | happy |
 
-Runs chunked, rolling-window evaluation on the held-out test actors and reports latency + online metrics:
+The grouped model shows a measurable accuracy improvement over the 8-class model, confirming that acoustically similar emotions are the main source of confusion.
 
-```bash
-python evaluate_streaming.py --artifacts-dir artifacts --data-dir actors_speech
-```
+---
 
-Output:
+### Experiment 3 — Gender Analysis
 
-- `artifacts/streaming_metrics.json`
+| Group | Accuracy |
+|-------|---------|
+| Female voices | Higher (~11% gap) |
+| Male voices | Lower |
 
-## Saved artifacts
+Female voices benefit from wider pitch range and higher acoustic brightness, giving the model clearer patterns. This represents a measurable **gender bias** in the model — in production, gender-normalized features or separate per-gender models would be needed.
 
-`artifacts/` includes:
+---
 
-- `hf_model/` (fine-tuned backbone + feature extractor)
-- `model_state.pt` (multi-task heads + config + weights)
-- `metadata.json`
-- `metrics.json`
-- `emotion_classification_report.json`
-- `intensity_classification_report.json`
-- `joint_classification_report.json`
-- `emotion_confusion_matrix.csv/.npy`
-- `intensity_confusion_matrix.csv/.npy`
-- `joint_confusion_matrix.csv/.npy`
-- `history.json`
-- `streaming_metrics.json` (after streaming eval)
+### Experiment 4 — Unsupervised Exploration (LDA + KMeans)
 
-## Run Streamlit app
+- **LDA** projects features down to 2D, maximizing class separation
+- **KMeans** clusters that space without using labels
 
-```bash
-streamlit run streamlit_app.py
-```
+Clusters in LDA space look fairly clean, but don't perfectly align with emotion labels — KMeans groups by acoustic similarity, not human-labelled emotion. Acoustically extreme emotions (`angry`, `calm`) form cleaner clusters. Similar-sounding pairs (`neutral` / `calm`) bleed into each other, matching what the SVM confusion matrix shows.
 
-In app:
+---
 
-- `Live` tab: rolling-window real-time predictions while speaking
-- `Clip` tab: one-shot prediction from recorded/uploaded audio
+### Experiment 5 — 5-Fold Cross-Validation
 
-Live mode auto-trims long speech to the latest chunk and predicts:
+GroupKFold cross-validation (by actor) was used to get a more stable accuracy estimate. This confirms performance and prevents any single actor split from skewing results.
 
-- emotion class
-- intensity degree (`normal`/`strong`)
+---
 
---------------------------------------------------------------------------
-The exact successful full run we completed on macboook was:
+## 🧰 Dependencies
 
-source .venv/bin/activate
+| Package | Purpose |
+|---------|---------|
+| `librosa` | Audio loading, feature extraction |
+| `soundfile` | Audio I/O |
+| `scikit-learn` | SVM, PCA, cross-validation, metrics |
+| `numpy` | Numerical operations |
+| `pandas` | Data management |
+| `matplotlib` | Visualization |
+| `seaborn` | Statistical plots |
+| `gdown` | Dataset download from Google Drive |
 
-MPLCONFIGDIR=/tmp python train_model.py \
-  --data-dir actors_speech \
-  --output-dir artifacts_fullrun_final \
-  --epochs 50 \
-  --batch-size 8 \
-  --patience 2 \
-  --duration-seconds 2.5 \
-  --augment-copies 0 \
-  --feature-stats-max-records 600 \
-  --emotion-loss focal \
-  --focal-gamma 2.0 \
-  --unfreeze-last-n-layers 2 \
-  --freeze-feature-encoder-epochs 1 \
-  --offline \
-  --num-workers 0 \
-  --device mps
+---
+
+## 🚀 Running the Notebook
+
+1. Open `emotion_recognition.ipynb` in Google Colab or Jupyter
+2. Run all cells in order — the dataset downloads automatically on first run
+3. Results, plots, and metrics will render inline
+
+---
+
+## 📝 Notes & Known Issues
+
+- The notebook uses a fixed random seed (`SEED = 42`) for reproducibility across all runs
+- The `load_audio` function includes a debug `print(y)` — this produces verbose output and can be removed
+- Augmented clips were previously written to a fake `Actor_99` folder; a cleanup cell removes this if it exists
+- The `neutral` emotion has roughly half the clips of other classes since RAVDESS only records it at normal intensity
